@@ -2,11 +2,26 @@ import axios from 'axios';
 import { Platform } from 'react-native';
 import { OCRResult } from '../types/navigation';
 
-// Tailscale IP for remote access via Expo Go
-// Use this when phone is on different network than PC
+// Base URL configuration
+// - Android emulator: 10.0.2.2 maps to host machine's localhost
+// - Physical device: use your machine's LAN IP
+// - iOS simulator / web: localhost works fine
+//
+// To find your LAN IP, check the Expo dev server output (e.g., exp://192.168.x.x:8081)
+// or run `ipconfig` (Windows) / `ifconfig` (macOS/Linux).
+const DEV_MACHINE_IP = '192.168.3.103';
+
 const getBaseURL = () => {
-  return 'http://100.69.255.57:8000';
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:8000';
+  }
+  if (Platform.OS === 'web') {
+    return 'http://localhost:8000';
+  }
+  // iOS (physical device or simulator) — use LAN IP
+  return `http://${DEV_MACHINE_IP}:8000`;
 };
+
 
 export const API_BASE_URL = getBaseURL();
 
@@ -18,18 +33,20 @@ const apiClient = axios.create({
   },
 });
 
-export const uploadReceipt = async (imageUri: string): Promise<OCRResult> => {
+export const uploadReceipt = async (imageUris: string[]): Promise<OCRResult> => {
   const formData = new FormData();
   
-  const filename = imageUri.split('/').pop() || 'receipt.jpg';
-  const match = /\.(\w+)$/.exec(filename);
-  const type = match ? `image/${match[1]}` : 'image/jpeg';
+  imageUris.forEach((uri, index) => {
+    const filename = uri.split('/').pop() || `receipt_${index}.jpg`;
+    const match = /\.(\w+)$/.exec(filename);
+    const type = match ? `image/${match[1]}` : 'image/jpeg';
 
-  formData.append('file', {
-    uri: imageUri,
-    name: filename,
-    type: type,
-  } as any);
+    formData.append('files', {
+      uri: uri,
+      name: filename,
+      type: type,
+    } as any);
+  });
 
   const response = await apiClient.post<OCRResult>('/api/ocr', formData, {
     headers: {

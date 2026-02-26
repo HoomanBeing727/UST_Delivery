@@ -21,8 +21,8 @@ def _load_model() -> Llama:
     """
     global _model
     if _model is None:
-        model_path = "backend/models/SmolVLM2-2.2B-Instruct-Q4_K_M.gguf"
-        mmproj_path = "backend/models/mmproj-SmolVLM2-2.2B-Instruct-Q4_K_M.gguf"
+        model_path = "models/SmolVLM2-2.2B-Instruct-Q4_K_M.gguf"
+        mmproj_path = "models/mmproj-SmolVLM2-2.2B-Instruct-Q8_0.gguf"
 
         logger.info(f"Loading VLM model from {model_path}...")
 

@@ -9,6 +9,17 @@ def _extract_price(text: str) -> float:
     return 0.0
 
 
+# HKUST validation keywords
+_HKUST_KEYWORDS = [
+    "HKUST",
+    "Hong Kong University of Science",
+    "Science & Technology",
+    "Science and Technology",
+    "香港科技大學",
+    "科技大學",
+    "科技大学",
+]
+
 def merge_items(items: list[dict]) -> list[dict]:
     """Merge duplicate items across multiple receipts.
     
@@ -58,9 +69,42 @@ def parse_receipt_structured(ocr_results: list[dict]) -> dict:
     items: list[dict] = []
     subtotal = 0.0
     total = 0.0
+    order_number = ""
+    is_valid = False
 
     if not ocr_results:
-        return {"items": [], "subtotal": 0.0, "total": 0.0, "errors": ["No OCR data"]}
+        return {
+            "items": [],
+            "subtotal": 0.0,
+            "total": 0.0,
+            "order_number": "",
+            "is_valid": False,
+            "errors": ["No OCR data"]
+        }
+
+    # Extract order number and check HKUST validation
+    full_text = " ".join([r["text"] for r in ocr_results])
+    
+    # Order number extraction
+    order_match = re.search(
+        r"(?:Order\s*#|訂單號碼\s*#|訂單\s*#)\s*(\d+)", full_text, re.IGNORECASE
+    )
+    if order_match:
+        order_number = order_match.group(1)
+    else:
+        # Handle split-line: "Order#" on one line, "206" on next
+        for i, result in enumerate(ocr_results):
+            if "#" in result["text"] and i + 1 < len(ocr_results):
+                num_match = re.match(r"^\s*(\d{2,})\s*$", ocr_results[i + 1]["text"])
+                if num_match:
+                    order_number = num_match.group(1)
+                    break
+    
+    # HKUST validation
+    for result in ocr_results:
+        if any(kw in result["text"] for kw in _HKUST_KEYWORDS):
+            is_valid = True
+            break
 
     # Step 1: Find section boundaries
     summary_start = None
@@ -202,7 +246,14 @@ def parse_receipt_structured(ocr_results: list[dict]) -> dict:
     if not items:
         errors.append("No items extracted")
 
-    return {"items": items, "subtotal": subtotal, "total": total, "errors": errors}
+    return {
+        "items": items,
+        "subtotal": subtotal,
+        "total": total,
+        "order_number": order_number,
+        "is_valid": is_valid,
+        "errors": errors
+    }
 
 
 # Backward compatibility wrapper

@@ -50,7 +50,6 @@ async def process_receipt(files: list[UploadFile] = File(...)) -> OCRResponse:
 
     return OCRResponse(
         order_number=parsed.get("order_number", ""),
-        restaurant=parsed.get("restaurant", ""),  # Will be removed in Task 10
         items=[OrderItem(**item) for item in parsed.get("items", [])],
         subtotal=parsed.get("subtotal", 0.0),
         total=parsed.get("total", 0.0),
