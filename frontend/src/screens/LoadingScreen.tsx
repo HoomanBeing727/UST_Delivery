@@ -94,7 +94,7 @@ export default function LoadingScreen({ navigation, route }: Props) {
         <View style={[styles.loaderBox, { backgroundColor: colors.surface }]}>
           <ActivityIndicator
             size="large"
-            color={colors.accent}
+            color="#0055de"
             style={styles.spinner}
           />
           <Animated.Text

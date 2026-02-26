@@ -39,9 +39,7 @@ export default function DashboardScreen({ navigation }: Props) {
     if (!hasPermission) return;
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [3, 4],
+      mediaTypes: ['images'],
       quality: 0.8,
     });
 
@@ -65,7 +63,7 @@ export default function DashboardScreen({ navigation }: Props) {
     >
       {/* Header */}
       <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.text }]}>UST McDelivery</Text>
+        <Text style={[styles.title, { color: colors.text }]}>DeliverU</Text>
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
           Student-to-Student Delivery
         </Text>
@@ -94,7 +92,7 @@ export default function DashboardScreen({ navigation }: Props) {
 
       {/* Upload Receipt Button */}
       <TouchableOpacity
-        style={[styles.uploadButton, { backgroundColor: colors.primary }]}
+        style={styles.uploadButton}
         onPress={handleUploadReceipt}
         activeOpacity={0.8}
       >
@@ -197,6 +195,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   uploadButton: {
+    backgroundColor: '#0055de',
     borderRadius: 20,
     padding: 24,
     marginBottom: 32,
