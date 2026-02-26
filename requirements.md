@@ -1,8 +1,119 @@
-# Goal 
-To create a delivery system of McDonalds between HKUST residents residing in nearby or the same hall. 
+# 🍔 HKUST McDelivery Peer-to-Peer System
 
-# Description 
-Envision that an HKUST Student named A is picking up their McDonald's meal on the way back to their dorm. The walk from McDonald's to the closest hall is at least 10 minutes. This is inconvenient for many students. Imagine, they can help to grab 2-3 other HKUST student's McDonald's meals and bring it to Hall 1. This way, the user can receive their meal quicker (reducing queue and clustering at the McDonald's pickup location), and the HKUST Student A is able to earn a bit of extra money. 
+## 🎯 Project Overview
+A community-driven McDelivery system for HKUST students to reduce long wait times and delivery inconvenience by connecting students who can pick up and deliver other students’ McDonald’s orders while returning to their halls.  
 
-# Workflow 
-To acquire the McDonald's API would be very difficult. Therefore, the most feasible app workflow would be to use an OCR based system that can allow users to upload a screenshot of their McDonald's mobile app order. This will scan for the time of order, the meal, the number etc. to verify it is a real order. This will extract the important information and ask the user for confirmation if the data scanned is correct. This order data will then be sent into a queue and assign to a delivery person. The delivery person can then take this data to acquire the corresponding order. Then, they will be able to take this order, and upon delivering, they should be able to pay in person or through the app, where this payment will have a verification system. The amount of money that the delivery will cost will be calculated using a formula based on the price of order + the location to be delivered relative to the McDonalds. If the user did not pay, the user may be blacklisted in order to preserve the integrity of the app. A similar system will be implemented to keep delivery people in check, such as adding a 10-15 minute timer. Sometimes, however, McDonald's orders may take up to 30 minutes, especially during rush hours. In this event, we are stuck on how to create an efficient and fool-proof system to preserve the integrity of both sides. Our first idea was to press an 'order pickup' button, however, this can easily be abused by delivery people outside of these hours. For example, they might pick up an order and not press it. 
+**Core Idea:**  
+Student A (delivery partner) picks up multiple nearby orders and delivers them to other students in HKUST halls, earning small rewards.
+
+---
+
+## 🧩 Problem Statement
+- McDonald’s pickup queues during meal rush hours are long.  
+- Students living in Halls must walk 10+ minutes to collect orders.  
+- Existing delivery platforms charge high fees and are inefficient for short distances.
+
+---
+
+## 🚀 Proposed Solution
+A lightweight, HKUST-internal app that allows:
+1. **Order upload and verification** (via OCR on McDonald’s app screenshot).  
+2. **Peer delivery matching** (students heading back to same hall group orders).  
+3. **Secure payments** with anti-fraud mechanisms.  
+4. **Rating and reputation** system to ensure trust.
+
+---
+
+## 🧠 Workflow Overview
+
+1. **User places order in the McDonald’s app.**
+2. **User uploads screenshot → OCR extracts details.**
+3. **Backend verifies data → adds to queue.**
+4. **Deliverer accepts order → travels to McDonald’s.**
+5. **At pickup:**  
+   - Deliverer must confirm pickup with photo + location proof.  
+6. **At delivery:**  
+   - User confirms receipt → funds released to deliverer.  
+7. **Both sides rate each other → improves trust network.**
+
+---
+
+## 🏗️ System Components
+
+| Layer | Technology | Description |
+|-------|-------------|-------------|
+| **Frontend (Mobile)** | React Native | Cross-platform mobile app for orderers & deliverers |
+| **Backend (API)** | FastAPI | Manages auth, queue, verification, payments |
+| **Database** | PostgreSQL | Structured storage for users, orders, transactions |
+| **Cache** | Redis | Real-time queue, live delivery status |
+| **OCR Engine** | PaddlePaddle | Extracts text and metadata from McDonald’s receipt screenshots |
+| **Storage** | Firebase / AWS S3 | For storing screenshots and proof images |
+| **Notification System** | Firebase Cloud Messaging / OneSignal | Updates users on delivery progress |
+| **Payment Gateway** | PayMe / AlipayHK / WeChat Pay / Credit Card | Secure peer-to-peer payments |
+
+---
+
+## 🔒 Verification and Safety Mechanisms
+
+1. **Photo verification** on pickup and delivery.  
+2. **GPS proof** required within McDonald’s location radius.  
+3. **Smart Timer** — adjusts wait time based on historical data.  
+4. **Escrow Wallet Logic** — users pay first; funds released post-confirmation.  
+5. **Blacklist System** for no-shows or fraud.  
+6. **Delivery/Order Rating** to build reputations.  
+
+---
+
+## 💸 Fee and Reward Model
+
+| Component | Description |
+|-----------|--------------|
+| **Delivery Fee** | ~8–10 HKD/order depending on distance |
+| **Platform Fee** | ~1–2 HKD for system maintenance |
+| **Deliverer Reward** | Receives remainder (approx. 80–90%) |
+| **Bonus Model** | Leaderboard for top weekly deliverers |
+
+---
+
+## 🧮 Delivery Fee Calculation Formula
+
+\[
+\text{Delivery Fee} = \alpha \times P + \beta \times D + \gamma
+\]
+Where:  
+- \(P\) = base meal price  
+- \(D\) = scaled hall distance (e.g., Hall 1 = 1, Hall 6 = 3)  
+- \(\alpha, \beta, \gamma\) = tunable constants for base rate, distance, and service fee  
+
+---
+
+## 🗓️ Project Timeline
+
+| Phase | Duration | Deliverables |
+|-------|-----------|--------------|
+| **Phase 1: Research & Design** | Requirement gathering, architecture diagram |
+| **Phase 2: MVP Development** | OCR module, upload verification, manual matching |
+| **Phase 3: Internal Beta** | Hall 1 pilot test with 10 users |
+| **Phase 4: Payment & Ratings** | Escrow system, feedback module |
+| **Phase 5: Expansion + Ops Dashboard** | Delivery analytics, moderator panel |
+
+---
+
+## 🧰 Development Guidelines
+
+- Maintain **separate roles:** `user`, `deliverer`, `admin`.  
+- Implement **JWT-based auth**.  
+- Use **GitHub Actions** for CI/CD pipeline.  
+- Focus on **scalability and modular code**.  
+- Follow **GDPR-like privacy** for user data and screenshots.
+
+---
+
+## 📊 Future Roadmap
+
+- AI-based delivery optimization (cluster detection, route grouping).  
+- Expand to other eateries (Starbucks, Subway, etc.).  
+- Integrate **campus food locker** delivery points.  
+- Potential open-source or student-managed pilot under HKUST ITSC club collaboration.
+
+---
