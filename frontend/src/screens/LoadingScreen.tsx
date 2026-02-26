@@ -9,66 +9,88 @@ import {
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useTheme } from '../context/ThemeContext';
-import { RootStackParamList } from '../types/navigation';
+import { RootStackParamList, OCRResult, OrderItem } from '../types/navigation';
 import { uploadReceipt } from '../services/api';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Loading'>;
 
-const MESSAGES = [
-  'Uploading image…',
-  'Running OCR…',
-  'Extracting order details…',
-  'Almost there…',
-];
+// Progress messages are now dynamic based on image count
+// Helper function to merge multiple OCR results
+const mergeOCRResults = (results: OCRResult[]): OCRResult => {
+  if (results.length === 0) {
+    throw new Error('No OCR results to merge');
+  }
+
+  const allItems: OrderItem[] = [];
+  let totalSubtotal = 0;
+  let totalAmount = 0;
+  const allErrors: string[] = [];
+  let anyValid = false;
+  
+  // Use the first result's metadata as base, but merge items/totals
+  const baseResult = results[0];
+
+  for (const result of results) {
+    allItems.push(...result.items);
+    totalSubtotal += result.subtotal;
+    totalAmount += result.total;
+    allErrors.push(...result.errors);
+    if (result.is_valid) anyValid = true;
+  }
+  
+  return {
+    order_number: baseResult.order_number, 
+    items: allItems,
+    subtotal: totalSubtotal,
+    total: totalAmount,
+    is_valid: anyValid,
+    errors: allErrors,
+  };
+};
+
 
 export default function LoadingScreen({ navigation, route }: Props) {
   const { colors } = useTheme();
-  const { imageUri } = route.params;
-  const [messageIdx, setMessageIdx] = useState(0);
-  const fadeAnim = useRef(new Animated.Value(1)).current;
+  // Extract imageUris from route params
+  const { imageUris } = route.params;
+  
+  const [currentImage, setCurrentImage] = useState(1);
+  const [totalImages] = useState(imageUris.length || 1);
   const hasNavigated = useRef(false);
 
-  // Cycle through loading messages
-  useEffect(() => {
-    const interval = setInterval(() => {
-      Animated.sequence([
-        Animated.timing(fadeAnim, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(fadeAnim, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-      ]).start();
 
-      setMessageIdx((prev) => (prev + 1) % MESSAGES.length);
-    }, 2500);
-
-    return () => clearInterval(interval);
-  }, [fadeAnim]);
-
-  // Upload + OCR call
   useEffect(() => {
     let cancelled = false;
 
     const process = async () => {
       try {
-        const result = await uploadReceipt(imageUri);
+        if (imageUris.length === 0) {
+           throw new Error('No images provided');
+        }
+
+        const results: OCRResult[] = [];
+        
+        for (let i = 0; i < imageUris.length; i++) {
+          if (cancelled || hasNavigated.current) return;
+          
+          setCurrentImage(i + 1);
+          const result = await uploadReceipt(imageUris[i]);
+          results.push(result);
+        }
 
         if (cancelled || hasNavigated.current) return;
+        
+        // Merge results if we have multiple, otherwise just take the first
+        const finalResult = results.length > 1 ? mergeOCRResults(results) : results[0];
+        
         hasNavigated.current = true;
-
-        navigation.replace('FormCorrection', { ocrResult: result });
+        navigation.replace('FormCorrection', { ocrResult: finalResult });
       } catch (error: unknown) {
         if (cancelled || hasNavigated.current) return;
         hasNavigated.current = true;
 
         let message = 'Something went wrong while processing your receipt.';
         if (error instanceof Error) {
-          // Axios wraps the response in error.message or error.response.data
           message = error.message;
         }
 
@@ -86,7 +108,7 @@ export default function LoadingScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [imageUri, navigation]);
+  }, [imageUris, navigation]);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -97,14 +119,11 @@ export default function LoadingScreen({ navigation, route }: Props) {
             color="#0055de"
             style={styles.spinner}
           />
-          <Animated.Text
-            style={[
-              styles.message,
-              { color: colors.text, opacity: fadeAnim },
-            ]}
-          >
-            {MESSAGES[messageIdx]}
-          </Animated.Text>
+          <Text style={[styles.message, { color: colors.text }]}>
+            {totalImages > 1 
+              ? `Processing image ${currentImage} of ${totalImages}...`
+              : 'Processing receipt...'}
+          </Text>
           <Text style={[styles.hint, { color: colors.textSecondary }]}>
             This may take a few seconds
           </Text>

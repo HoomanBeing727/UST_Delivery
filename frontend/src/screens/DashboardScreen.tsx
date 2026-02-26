@@ -40,12 +40,14 @@ export default function DashboardScreen({ navigation }: Props) {
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      selectionLimit: 10,
       quality: 0.8,
     });
 
-    if (!result.canceled && result.assets[0]) {
+    if (!result.canceled && result.assets.length > 0) {
       navigation.navigate('Loading', {
-        imageUri: result.assets[0].uri,
+        imageUris: result.assets.map(asset => asset.uri),
       });
     }
   };

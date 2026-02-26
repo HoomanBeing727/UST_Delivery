@@ -6,7 +6,6 @@ export interface OrderItem {
 
 export interface OCRResult {
   order_number: string;
-  restaurant: string;
   items: OrderItem[];
   subtotal: number;
   total: number;
@@ -17,7 +16,7 @@ export interface OCRResult {
 export type RootStackParamList = {
   Dashboard: undefined;
   Loading: {
-    imageUri: string;
+    imageUris: string[];
   };
   FormCorrection: {
     ocrResult: OCRResult;

@@ -21,7 +21,6 @@ export default function FormCorrectionScreen({ navigation, route }: Props) {
   const { ocrResult } = route.params;
 
   const [orderNumber, setOrderNumber] = useState(ocrResult.order_number);
-  const [restaurant, setRestaurant] = useState(ocrResult.restaurant);
   const [items, setItems] = useState<OrderItem[]>(
     ocrResult.items.length > 0
       ? ocrResult.items
@@ -66,10 +65,6 @@ export default function FormCorrectionScreen({ navigation, route }: Props) {
       Alert.alert('Missing Info', 'Please enter an order number.');
       return;
     }
-    if (!restaurant.trim()) {
-      Alert.alert('Missing Info', 'Please enter the restaurant name.');
-      return;
-    }
     if (items.some((item) => !item.name.trim())) {
       Alert.alert('Missing Info', 'All items must have a name.');
       return;
@@ -77,7 +72,6 @@ export default function FormCorrectionScreen({ navigation, route }: Props) {
 
     const finalOrder = {
       order_number: orderNumber.trim(),
-      restaurant: restaurant.trim(),
       items: items.map((item) => ({
         name: item.name.trim(),
         quantity: item.quantity || 1,
@@ -154,22 +148,6 @@ export default function FormCorrectionScreen({ navigation, route }: Props) {
           keyboardType="number-pad"
         />
 
-        {/* Restaurant */}
-        <Text style={[styles.label, { color: colors.text }]}>Restaurant</Text>
-        <TextInput
-          style={[
-            styles.input,
-            {
-              backgroundColor: colors.surface,
-              color: colors.text,
-              borderColor: colors.border,
-            },
-          ]}
-          value={restaurant}
-          onChangeText={setRestaurant}
-          placeholder="e.g. The Hong Kong University of Science & Technology"
-          placeholderTextColor={colors.textSecondary}
-        />
 
         {/* Items */}
         <View style={styles.sectionHeader}>
