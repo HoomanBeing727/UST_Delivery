@@ -1,8 +1,9 @@
-from fastapi import APIRouter, File, HTTPException, UploadFile
+
+from fastapi import APIRouter, File, UploadFile
 
 from app.models.schemas import OCRResponse, OrderItem
-from app.services.ocr_service import extract_text
-from app.services.receipt_parser import parse_receipt
+from app.services.ocr_service import extract_text_with_metadata
+from app.services.receipt_parser import parse_receipt_structured
 
 router = APIRouter(prefix="/api", tags=["OCR"])
 
@@ -10,36 +11,50 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 @router.post("/ocr", response_model=OCRResponse)
-async def process_receipt(file: UploadFile = File(...)) -> OCRResponse:
-    """Accept a receipt image, run OCR, and return structured order data."""
-    # Validate content type
-    if file.content_type and not file.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"File must be an image, got {file.content_type}",
-        )
+async def process_receipt(files: list[UploadFile] = File(...)) -> OCRResponse:
+    """Accept multiple receipt images, run OCR on each, concatenate, parse once."""
+    all_ocr_results = []
+    all_errors = []
+    all_raw_text = []
 
-    # Read and validate size
-    contents = await file.read()
-    if len(contents) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large ({len(contents)} bytes). Max is {MAX_FILE_SIZE} bytes.",
-        )
+    # Process each file sequentially
+    for file in files:
+        try:
+            # Validate content type
+            if file.content_type and not file.content_type.startswith("image/"):
+                all_errors.append(f"File {file.filename} is not an image: {file.content_type}")
+                continue
 
-    # Run OCR
-    text_lines = extract_text(contents)
+            # Read and validate size
+            contents = await file.read()
+            if len(contents) > MAX_FILE_SIZE:
+                all_errors.append(f"File {file.filename} too large: {len(contents)} bytes")
+                continue
 
-    # Parse receipt
-    parsed = parse_receipt(text_lines)
+            # Extract OCR with metadata
+            ocr_data = extract_text_with_metadata(contents)
+            all_ocr_results.extend(ocr_data['ocr_results'])
+            all_raw_text.extend(ocr_data['full_text'].split('\n'))
+
+        except Exception as e:
+            all_errors.append(f"OCR failed for {file.filename}: {str(e)}")
+
+    # Parse combined OCR results as ONE receipt
+    parsed = parse_receipt_structured(all_ocr_results)
+    
+    # Merge errors
+    if parsed.get("errors"):
+        parsed["errors"].extend(all_errors)
+    else:
+        parsed["errors"] = all_errors
 
     return OCRResponse(
-        order_number=parsed["order_number"],
-        restaurant=parsed["restaurant"],
-        items=[OrderItem(**item) for item in parsed["items"]],
-        subtotal=parsed["subtotal"],
-        total=parsed["total"],
-        is_valid=parsed["is_valid"],
-        errors=parsed["errors"],
-        raw_text=text_lines,
+        order_number=parsed.get("order_number", ""),
+        restaurant=parsed.get("restaurant", ""),  # Will be removed in Task 10
+        items=[OrderItem(**item) for item in parsed.get("items", [])],
+        subtotal=parsed.get("subtotal", 0.0),
+        total=parsed.get("total", 0.0),
+        is_valid=parsed.get("is_valid", False),
+        errors=parsed.get("errors", []),
+        raw_text=all_raw_text,
     )
