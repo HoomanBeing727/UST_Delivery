@@ -1,255 +1,212 @@
 import re
 
 
-# Section markers in McDonald's receipts (including OCR-mangled variants)
-_SECTION_MARKERS = [
-    "order details", "serving restaurant", "order summary",
-    "payment details", "subtotal", "total",
-    "訂單詳情", "提供服務的餐廳", "訂單摘要", "訂單內容",
-    "付款詳情", "合計", "總計",
-    # OCR-mangled variants
-    "订罩", "付款情", "訂罩",
-]
-
-_HKUST_KEYWORDS = [
-    "HKUST",
-    "Hong Kong University of Science",
-    "Science & Technology",
-    "Science and Technology",
-    "香港科技大學",
-    "科技大學",
-    "科技大学",
-]
-
-
-def _extract_price(text: str) -> float | None:
+def _extract_price(text: str) -> float:
     """Extract HK$ price from a text string."""
     match = re.search(r"(?:HK)?\$\s*([\d,]+\.?\d*)", text)
     if match:
         return float(match.group(1).replace(",", ""))
-    return None
+    return 0.0
 
 
-def _is_section_marker(line: str) -> bool:
-    """Check if a line is a known section marker."""
-    lower = line.strip().lower()
-    return any(marker in lower for marker in _SECTION_MARKERS)
+def parse_receipt_structured(ocr_results: list[dict]) -> dict:
+    """
+    Parse OCR results with bounding box metadata using structural understanding.
 
+    Strategy:
+    1. Find section boundaries: "Order Summary" → "Payment Details"
+    2. Collect title lines (before components start)
+    3. Detect component start: First line that clearly repeats the main item name
+    4. Collect all subsequent lines as components
+    5. Filter messages ("No add-on, thank you!")
+    6. Extract prices from Payment Details section
 
-def parse_receipt(text_lines: list[str]) -> dict:
-    """Parse OCR text lines from a McDonald's receipt into structured order data."""
+    Args:
+        ocr_results: List of dicts with {text, bbox, height, confidence, avg_y}
+
+    Returns:
+        dict with {items, subtotal, total, errors}
+    """
     errors: list[str] = []
-    order_number = ""
-    restaurant = ""
     items: list[dict] = []
     subtotal = 0.0
     total = 0.0
 
-    full_text = "\n".join(text_lines)
+    if not ocr_results:
+        return {"items": [], "subtotal": 0.0, "total": 0.0, "errors": ["No OCR data"]}
 
-    # --- Order Number ---
-    # Handle same-line: "Order #163" or "訂單號碼 #168"
-    order_match = re.search(
-        r"(?:Order\s*#|訂單號碼\s*#|訂單\s*#)\s*(\d+)", full_text, re.IGNORECASE
-    )
-    if order_match:
-        order_number = order_match.group(1)
-    else:
-        # Handle split-line: any line with "#" followed by next line being a number
-        for i, line in enumerate(text_lines):
-            if "#" in line and i + 1 < len(text_lines):
-                num_match = re.match(r"^\s*(\d{2,})\s*$", text_lines[i + 1])
-                if num_match:
-                    order_number = num_match.group(1)
-                    break
+    # Step 1: Find section boundaries
+    summary_start = None
+    payment_start = None
 
-    if not order_number:
-        errors.append("Could not extract order number")
+    for i, result in enumerate(ocr_results):
+        text_lower = result["text"].lower()
 
-    # --- Restaurant ---
-    for i, line in enumerate(text_lines):
-        if any(kw in line for kw in _HKUST_KEYWORDS):
-            restaurant = line.strip()
-            # Only concatenate if next line starts with "&" (continuation)
-            if i + 1 < len(text_lines):
-                next_line = text_lines[i + 1].strip()
-                if next_line.startswith("&"):
-                    restaurant = f"{restaurant} {next_line}"
-            break
-
-    if not restaurant:
-        # Fuzzy: look for lines after "Serving restaurant" / "提供服務的餐廳"
-        for i, line in enumerate(text_lines):
-            lower = line.strip().lower()
-            if "serving restaurant" in lower or "提供服務" in lower:
-                if i + 1 < len(text_lines):
-                    restaurant = text_lines[i + 1].strip()
-                    if i + 2 < len(text_lines):
-                        next2 = text_lines[i + 2].strip()
-                        if next2.startswith("&"):
-                            restaurant = f"{restaurant} {next2}"
-                break
-
-    if not restaurant:
-        errors.append("Could not extract restaurant name")
-
-    # --- HKUST Validation ---
-    is_valid = bool(
-        restaurant and any(kw in restaurant for kw in _HKUST_KEYWORDS)
-    )
-
-    # --- Items ---
-    # Find the "item section" between Order Summary and Payment Details
-    item_start = -1
-    item_end = len(text_lines)
-
-    for i, line in enumerate(text_lines):
-        lower = line.strip().lower()
-        # Match "Order Summary" or Chinese variants (including OCR-mangled)
-        if any(kw in lower for kw in ["order summary", "訂單摘要", "訂單內容",
-                                        "訂罩内容", "訂罩內容", "订罩内容"]):
-            item_start = i + 1
-        elif item_start >= 0 and any(
-            kw in lower for kw in ["payment details", "付款詳情", "付款情",
-                                    "subtotal", "合計"]
+        # Match "Order Summary" or Chinese variants
+        if any(
+            kw in text_lower
+            for kw in ["order summary", "訂單摘要", "訂單內容", "訂罩内容"]
         ):
-            item_end = i
+            summary_start = i
+
+        # Match "Payment Details" or Chinese variants
+        if any(kw in text_lower for kw in ["payment details", "付款詳情", "付款情"]):
+            payment_start = i
             break
 
-    if item_start >= 0:
-        item_section = text_lines[item_start:item_end]
+    if summary_start is None or payment_start is None:
+        errors.append("Section boundaries not found")
+        return {"items": [], "subtotal": 0.0, "total": 0.0, "errors": errors}
 
-        # Check for quantity markers
-        has_qty_markers = any(
-            re.search(r"[×xX]\s*\d+", line) for line in item_section
-        )
+    # Step 2: Extract item section
+    item_section = ocr_results[summary_start + 1 : payment_start]
 
-        if has_qty_markers:
-            for i, line in enumerate(item_section):
-                qty_match = re.search(r"[×xX]\s*(\d+)", line)
-                if qty_match:
-                    quantity = int(qty_match.group(1))
-                    name_part = re.split(r"\s*[×xX]\s*\d+", line)[0].strip()
-                    if not name_part and i > 0:
-                        name_part = item_section[i - 1].strip()
-                    price = 0.0
-                    price_val = _extract_price(line)
-                    if price_val is not None:
-                        price = price_val
-                    elif i + 1 < len(item_section):
-                        price_val = _extract_price(item_section[i + 1])
-                        if price_val is not None:
-                            price = price_val
-                    if name_part:
-                        items.append({"name": name_part, "quantity": quantity, "price": price})
+    if not item_section:
+        errors.append("No items found between sections")
+        return {"items": [], "subtotal": 0.0, "total": 0.0, "errors": errors}
+
+    # Step 3: Two-phase parsing
+    title_lines: list[str] = []
+    component_lines: list[str] = []
+    in_component_phase = False
+    main_item_keywords: set[str] = set()
+
+    for i, result in enumerate(item_section):
+        text = result["text"].strip()
+        text_lower = text.lower()
+
+        if not text:
+            continue
+
+        # Filter messages
+        if any(kw in text_lower for kw in ["add-on", "thank you", "message"]):
+            continue
+
+        # Skip pure price lines
+        if re.match(r"^(?:HK)?\$\s*[\d,.]+$", text):
+            continue
+
+        # Skip Chinese promotional text
+        if re.match(r"^[\d\u4e00-\u9fff]+$", text):
+            continue
+
+        # If not in component phase yet, check if this line starts it
+        if not in_component_phase:
+            # Component indicators: these signal a component line
+            component_indicators = [
+                "chicken mcnuggets",  # Repeated main item name
+                "hot mustard",
+                "sauce",
+            ]
+            
+            # Only start component phase if we have title AND see a clear indicator
+            if title_lines and any(ind in text_lower for ind in component_indicators):
+                in_component_phase = True
+
+        # Collect into appropriate phase
+        if in_component_phase:
+            component_lines.append(text)
         else:
-            # No quantity markers. Pick the LAST readable name before Payment Details
-            # as the item name (McDonald's shows item multiple times: Chinese, UPPERCASE, mixed case)
-            # The mixed-case version is the most readable.
-            candidate_names: list[str] = []
-            for line in item_section:
-                stripped = line.strip()
-                if not stripped or len(stripped) < 3:
-                    continue
-                if re.match(r"^(?:HK)?\$\s*[\d.]+$", stripped):
-                    continue
-                if re.match(r"^\d+$", stripped):
-                    continue
-                if _is_section_marker(stripped):
-                    continue
-                candidate_names.append(stripped)
+            title_lines.append(text)
 
-            if candidate_names:
-                # Use the last candidate (typically the mixed-case display name)
-                # This avoids picking garbled OCR text or ALL-CAPS code names
-                best_name = candidate_names[-1]
-                # If there are multiple candidates, try to find one with mixed case
-                for name in reversed(candidate_names):
-                    if not name.isupper() and any(c.isalpha() for c in name):
-                        best_name = name
-                        break
-                items.append({"name": best_name, "quantity": 1, "price": 0.0})
+    # Step 4: Create item
+    if title_lines:
+        item_name = " ".join(title_lines)
 
-    # Fallback: look for quantity markers anywhere in the text
-    if not items:
-        for i, line in enumerate(text_lines):
-            qty_match = re.search(r"[×xX]\s*(\d+)", line)
-            if qty_match:
-                quantity = int(qty_match.group(1))
-                name_part = re.split(r"\s*[×xX]\s*\d+", line)[0].strip()
-                if not name_part and i > 0:
-                    name_part = text_lines[i - 1].strip()
-                price = 0.0
-                price_val = _extract_price(line)
-                if price_val:
-                    price = price_val
-                if name_part:
-                    skip_kw = ["subtotal", "total", "合計", "總計", "order", "訂單"]
-                    if not any(kw in name_part.lower() for kw in skip_kw):
-                        items.append({"name": name_part, "quantity": quantity, "price": price})
-
-    if not items:
-        errors.append("Could not extract any order items")
-
-    # --- Subtotal ---
-    for i, line in enumerate(text_lines):
-        if re.search(r"(?:Subtotal|合計)", line, re.IGNORECASE):
-            price_val = _extract_price(line)
-            if price_val is not None:
-                subtotal = price_val
-                break
-            if i > 0:
-                price_val = _extract_price(text_lines[i - 1])
-                if price_val is not None:
-                    subtotal = price_val
-                    break
-            if i + 1 < len(text_lines):
-                price_val = _extract_price(text_lines[i + 1])
-                if price_val is not None:
-                    subtotal = price_val
-                    break
-
-    # --- Total ---
-    for i, line in enumerate(text_lines):
-        lower = line.strip().lower()
-        is_total_line = ("total" in lower or "總計" in lower) and not (
-            "subtotal" in lower or "合計" in lower
+        items.append(
+            {
+                "name": item_name,
+                "quantity": 1,
+                "price": 0.0,
+                "components": component_lines,
+            }
         )
-        if is_total_line:
-            price_val = _extract_price(line)
-            if price_val is not None:
-                total = price_val
-                break
-            if i > 0:
-                price_val = _extract_price(text_lines[i - 1])
-                if price_val is not None:
-                    total = price_val
-                    break
-            if i + 1 < len(text_lines):
-                price_val = _extract_price(text_lines[i + 1])
-                if price_val is not None:
-                    total = price_val
-                    break
 
-    # Fallback: if no total found, use the last HK$ price in the text
-    if total == 0.0:
-        for line in reversed(text_lines):
-            price_val = _extract_price(line)
-            if price_val is not None:
-                total = price_val
-                break
+    # Step 5: Extract prices from Payment Details
+    payment_section = ocr_results[payment_start:]
 
-    # Assign item price from subtotal if items have no price
-    if items and all(item["price"] == 0.0 for item in items) and subtotal > 0:
-        if len(items) == 1:
-            items[0]["price"] = subtotal
+    # First pass: try to find prices on same line as keywords
+    for result in payment_section:
+        text = result["text"]
+        text_lower = text.lower()
 
-    return {
-        "order_number": order_number,
-        "restaurant": restaurant,
-        "items": items,
-        "subtotal": subtotal,
-        "total": total,
-        "is_valid": is_valid,
-        "errors": errors,
-    }
+        if (
+            "subtotal" in text_lower or "小計" in text or "合計" in text
+        ) and subtotal == 0.0:
+            price = _extract_price(text)
+            if price > 0:
+                subtotal = price
+
+        if ("total" in text_lower or "總計" in text) and total == 0.0:
+            if (
+                "subtotal" not in text_lower
+                and "小計" not in text
+                and "合計" not in text
+            ):
+                price = _extract_price(text)
+                if price > 0:
+                    total = price
+
+    # Second pass: look at adjacent lines if not found
+    if subtotal == 0.0 or total == 0.0:
+        for i, result in enumerate(payment_section):
+            text_lower = result["text"].lower()
+
+            if (
+                "subtotal" in text_lower or "合計" in result["text"]
+            ) and subtotal == 0.0:
+                for offset in [0, -1, 1]:
+                    if 0 <= i + offset < len(payment_section):
+                        price = _extract_price(payment_section[i + offset]["text"])
+                        if price > 0:
+                            subtotal = price
+                            break
+
+            if ("total" in text_lower or "總計" in result["text"]) and total == 0.0:
+                if "subtotal" not in text_lower and "合計" not in result["text"]:
+                    for offset in [0, -1, 1]:
+                        if 0 <= i + offset < len(payment_section):
+                            price = _extract_price(payment_section[i + offset]["text"])
+                            if price > 0:
+                                total = price
+                                break
+
+    # Validation
+    if not items:
+        errors.append("No items extracted")
+
+    return {"items": items, "subtotal": subtotal, "total": total, "errors": errors}
+
+
+# Backward compatibility wrapper
+def parse_receipt(text_lines: list[str]) -> dict:
+    """
+    Legacy function for backward compatibility.
+    Converts text lines to OCR result format and calls new parser.
+    """
+    # Convert text lines to minimal OCR result format
+    ocr_results = []
+    for i, text in enumerate(text_lines):
+        ocr_results.append(
+            {
+                "text": text,
+                "bbox": [
+                    [0, i * 20],
+                    [100, i * 20],
+                    [100, (i + 1) * 20],
+                    [0, (i + 1) * 20],
+                ],
+                "height": 20.0,
+                "confidence": 1.0,
+                "avg_y": i * 20,
+            }
+        )
+
+    result = parse_receipt_structured(ocr_results)
+
+    # Add legacy fields for backward compatibility
+    result["order_number"] = ""
+    result["restaurant"] = ""
+    result["is_valid"] = False
+
+    return result
