@@ -9,6 +9,33 @@ def _extract_price(text: str) -> float:
     return 0.0
 
 
+def merge_items(items: list[dict]) -> list[dict]:
+    """Merge duplicate items across multiple receipts.
+    
+    Args:
+        items: List of item dicts with {name, quantity, price, components}
+    
+    Returns:
+        List of merged items (new dicts, not modified originals)
+    """
+    merged = {}
+    
+    for item in items:
+        name = item['name']
+        if name in merged:
+            # Merge quantities
+            merged[name]['quantity'] += item['quantity']
+            # Merge components (deduplicate)
+            for comp in item['components']:
+                if comp not in merged[name]['components']:
+                    merged[name]['components'].append(comp)
+        else:
+            # New item - deep copy to avoid modifying original
+            merged[name] = item.copy()
+            merged[name]['components'] = item['components'].copy()  # Deep copy components list
+    
+    return list(merged.values())
+
 def parse_receipt_structured(ocr_results: list[dict]) -> dict:
     """
     Parse OCR results with bounding box metadata using structural understanding.
