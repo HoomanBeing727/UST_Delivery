@@ -37,7 +37,7 @@ def extract_text_with_metadata(image_bytes: bytes) -> dict:
     
     Returns:
         dict with keys:
-        - ocr_results: list of dicts with {text, bbox, height, confidence, avg_y}
+        - ocr_results: list of dicts with {text, bbox, height, confidence, avg_y, avg_x}
         - full_text: concatenated text (same as extract_text output)
     """
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -61,12 +61,16 @@ def extract_text_with_metadata(image_bytes: bytes) -> dict:
         # Calculate average Y for sorting (top-to-bottom)
         avg_y = sum(point[1] for point in bbox) / len(bbox)
 
+        # Calculate average X for horizontal position
+        avg_x = sum(point[0] for point in bbox) / len(bbox)
+
         ocr_results.append({
             "text": text,
             "bbox": bbox,
             "height": height,
             "confidence": confidence,
-            "avg_y": avg_y
+            "avg_y": avg_y,
+            "avg_x": avg_x
         })
 
     # Sort by vertical position (top-to-bottom)

@@ -11,6 +11,7 @@ export interface OCRResult {
   total: number;
   is_valid: boolean;
   errors: string[];
+  restaurant?: string;
 }
 
 export type RootStackParamList = {

@@ -9,7 +9,7 @@ import { OCRResult } from '../types/navigation';
 //
 // To find your LAN IP, check the Expo dev server output (e.g., exp://192.168.x.x:8081)
 // or run `ipconfig` (Windows) / `ifconfig` (macOS/Linux).
-const DEV_MACHINE_IP = '192.168.3.103';
+const DEV_MACHINE_IP = '192.168.3.201';
 
 const getBaseURL = () => {
   if (Platform.OS === 'android') {

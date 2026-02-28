@@ -1,290 +1,321 @@
 import re
+from difflib import SequenceMatcher
+from typing import Any
+
+
+# ─── Bilingual section markers ───
+SECTIONS: dict[str, list[str]] = {
+    "order_num": ["Order #", "訂單號碼"],
+    "restaurant": ["Serving restaurant", "提供服務的餐廳"],
+    "summary": ["Order Summary", "訂單內容"],
+    "payment": ["Payment Details", "付款詳情"],
+}
+
+
+# =========================================================
+# HELPERS
+# =========================================================
 
 
 def _extract_price(text: str) -> float:
-    """Extract HK$ price from a text string."""
-    match = re.search(r"(?:HK)?\$\s*([\d,]+\.?\d*)", text)
+    """Extract a decimal price from text like 'HK$ 1,089.00'."""
+    match = re.search(r"([\d,]+\.\d{2})", text)
     if match:
         return float(match.group(1).replace(",", ""))
     return 0.0
 
 
-# HKUST validation keywords
-_HKUST_KEYWORDS = [
-    "HKUST",
-    "Hong Kong University of Science",
-    "Science & Technology",
-    "Science and Technology",
-    "香港科技大學",
-    "科技大學",
-    "科技大学",
-]
+def _contains_hkust(text: str) -> bool:
+    lower = text.lower()
+    return "hong kong university of science" in lower or "hkust" in lower
 
-def merge_items(items: list[dict]) -> list[dict]:
-    """Merge duplicate items across multiple receipts.
-    
-    Args:
-        items: List of item dicts with {name, quantity, price, components}
-    
-    Returns:
-        List of merged items (new dicts, not modified originals)
+
+def _convert_ocr_entries(ocr_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert OCR service format {text,bbox,height,confidence,avg_y,avg_x}
+    to parser entry format {text,x,y,h}."""
+    entries: list[dict[str, Any]] = []
+    for item in ocr_results:
+        text = item.get("text", "").strip()
+        if not text:
+            continue
+        entries.append(
+            {
+                "text": text,
+                "x": item.get("avg_x", 0.0),
+                "y": item.get("avg_y", 0.0),
+                "h": item.get("height", 0.0),
+            }
+        )
+    return sorted(entries, key=lambda e: (e["y"], e["x"]))
+
+
+# =========================================================
+# Row clustering
+# =========================================================
+
+
+def cluster_rows(entries: list[dict[str, Any]], y_gap: float = 15) -> list[list[dict[str, Any]]]:
+    """Group entries into rows by vertical proximity."""
+    if not entries:
+        return []
+    rows: list[list[dict[str, Any]]] = []
+    cur = [entries[0]]
+    for e in entries[1:]:
+        if e["y"] - cur[-1]["y"] > y_gap:
+            rows.append(sorted(cur, key=lambda e: e["x"]))
+            cur = []
+        cur.append(e)
+    rows.append(sorted(cur, key=lambda e: e["x"]))
+    return rows
+
+
+def row_text(row: list[dict[str, Any]]) -> str:
+    return " ".join(e["text"] for e in row)
+
+
+# =========================================================
+# Multi-screenshot merge
+# =========================================================
+
+
+def merge_screenshots(entries_list: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
     """
-    merged = {}
-    
-    for item in items:
-        name = item['name']
-        if name in merged:
-            # Merge quantities
-            merged[name]['quantity'] += item['quantity']
-            # Merge components (deduplicate)
-            for comp in item['components']:
-                if comp not in merged[name]['components']:
-                    merged[name]['components'].append(comp)
+    Merge multiple screenshot OCR results.
+    Detects overlap between tail of image N and head of image N+1,
+    deduplicates, then concatenates.
+    """
+    if len(entries_list) <= 1:
+        return entries_list[0] if entries_list else []
+
+    merged_rows = cluster_rows(entries_list[0])
+
+    for entries in entries_list[1:]:
+        new_rows = cluster_rows(entries)
+
+        # compare tail of merged vs head of new to find overlap
+        tail_texts = [row_text(r).lower() for r in merged_rows[-8:]]
+        overlap_end = 0
+
+        for i, nr in enumerate(new_rows):
+            nt = row_text(nr).lower()
+            for tt in tail_texts:
+                if SequenceMatcher(None, nt, tt).ratio() > 0.75:
+                    overlap_end = i + 1  # skip this row (it's a duplicate)
+                    break
+
+        # append non-overlapping rows with a y-offset so ordering is preserved
+        y_offset = max(e["y"] for r in merged_rows for e in r) + 100
+
+        for row in new_rows[overlap_end:]:
+            merged_rows.append([{**e, "y": e["y"] + y_offset} for e in row])
+
+    return [e for row in merged_rows for e in row]
+
+
+# =========================================================
+# Locate sections
+# =========================================================
+
+
+def find_sections(rows: list[list[dict[str, Any]]]) -> dict[str, int]:
+    """Return {section_name: row_index} for each detected section marker."""
+    idx: dict[str, int] = {}
+    for i, row in enumerate(rows):
+        t = row_text(row).lower()
+        for name, keywords in SECTIONS.items():
+            if any(kw.lower() in t for kw in keywords):
+                idx[name] = i
+    return idx
+
+
+def next_section_idx(sec_idx: dict[str, int], after: int, total_rows: int) -> int:
+    """Find the row index of the next section after `after`."""
+    candidates = [v for k, v in sec_idx.items() if v > after]
+    return min(candidates) if candidates else total_rows
+
+
+# =========================================================
+# Parse each section
+# =========================================================
+
+
+def parse_order_number(rows: list[list[dict[str, Any]]], sec_idx: dict[str, int]) -> str:
+    if "order_num" not in sec_idx:
+        return ""
+    start = sec_idx["order_num"]
+    end = next_section_idx(sec_idx, start, len(rows))
+    for row in rows[start:end]:
+        t = row_text(row)
+        for kw in SECTIONS["order_num"] + ["#"]:
+            t = t.replace(kw, "")
+        nums = re.findall(r"\d+", t)
+        if nums:
+            return nums[0]
+    return ""
+
+
+def parse_restaurant(rows: list[list[dict[str, Any]]], sec_idx: dict[str, int]) -> str:
+    if "restaurant" not in sec_idx:
+        return ""
+    start = sec_idx["restaurant"] + 1  # skip the marker row itself
+    end = next_section_idx(sec_idx, sec_idx["restaurant"], len(rows))
+    parts: list[str] = []
+    for row in rows[start:end]:
+        t = row_text(row)
+        # stop if we accidentally hit another marker
+        if any(any(kw.lower() in t.lower() for kw in kws) for kws in SECTIONS.values()):
+            break
+        parts.append(t)
+    return " ".join(parts).strip()
+
+
+def has_qty_on_right(row: list[dict[str, Any]], x_gap: float = 40) -> tuple[bool, int | None]:
+    """
+    Key heuristic: if the rightmost element in a row is a standalone
+    number AND it's far to the right of the other text, it's a
+    quantity indicator and this row starts a NEW item.
+    """
+    if len(row) < 2:
+        return False, None
+    rightmost = max(row, key=lambda e: e["x"])
+    if not re.fullmatch(r"\d+", rightmost["text"]):
+        return False, None
+    rest_max_x = max(e["x"] for e in row if e is not rightmost)
+    if rightmost["x"] - rest_max_x > x_gap:
+        return True, int(rightmost["text"])
+    return False, None
+
+
+def parse_items(rows: list[list[dict[str, Any]]], sec_idx: dict[str, int]) -> list[dict[str, Any]]:
+    """
+    Between "Order Summary" and "Payment Details":
+      - row with qty number on far right  →  new item (name = rest of row)
+      - row without qty                   →  detail of current item
+    """
+    if "summary" not in sec_idx:
+        return []
+    start = sec_idx["summary"] + 1
+    end = next_section_idx(sec_idx, sec_idx["summary"], len(rows))
+
+    items: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+
+    for row in rows[start:end]:
+        t = row_text(row)
+        # stop if we hit another section marker
+        if any(any(kw.lower() in t.lower() for kw in kws) for kws in SECTIONS.values()):
+            break
+
+        found_qty, qty = has_qty_on_right(row)
+
+        if found_qty:
+            # start new item
+            if current:
+                items.append(current)
+            rightmost = max(row, key=lambda e: e["x"])
+            name = " ".join(e["text"] for e in row if e is not rightmost)
+            current = {"name": name, "quantity": qty, "price": 0.0}
+
+        elif current is not None:
+            # detail line of current item (not in schema, skip)
+            pass
+
         else:
-            # New item - deep copy to avoid modifying original
-            merged[name] = item.copy()
-            merged[name]['components'] = item['components'].copy()  # Deep copy components list
-    
-    return list(merged.values())
+            # edge case: item without detected qty
+            current = {"name": t, "quantity": 1, "price": 0.0}
 
-def parse_receipt_structured(ocr_results: list[dict]) -> dict:
-    """
-    Parse OCR results with bounding box metadata using structural understanding.
+    if current:
+        items.append(current)
+    return items
 
-    Strategy:
-    1. Find section boundaries: "Order Summary" → "Payment Details"
-    2. Collect title lines (before components start)
-    3. Detect component start: First line that clearly repeats the main item name
-    4. Collect all subsequent lines as components
-    5. Filter messages ("No add-on, thank you!")
-    6. Extract prices from Payment Details section
 
-    Args:
-        ocr_results: List of dicts with {text, bbox, height, confidence, avg_y}
-
-    Returns:
-        dict with {items, subtotal, total, errors}
-    """
-    errors: list[str] = []
-    items: list[dict] = []
+def parse_payment(
+    rows: list[list[dict[str, Any]]], sec_idx: dict[str, int]
+) -> tuple[float, float]:
+    if "payment" not in sec_idx:
+        return 0.0, 0.0
     subtotal = 0.0
     total = 0.0
-    order_number = ""
-    is_valid = False
+    for row in rows[sec_idx["payment"] :]:
+        t = row_text(row)
+        t_lower = t.lower()
+        if "subtotal" in t_lower or "合計" in t:
+            subtotal = _extract_price(t)
+        elif "total" in t_lower or "總計" in t:
+            total = _extract_price(t)
+    return subtotal, total
 
-    if not ocr_results:
+
+# =========================================================
+# MAIN PARSER
+# =========================================================
+
+
+def parse_mcd_app_receipt(ocr_results_per_image: list[list[dict[str, Any]]]) -> dict[str, Any]:
+    """
+    Parse McDonald's app receipt from OCR results.
+
+    Args:
+        ocr_results_per_image: list of per-image OCR results,
+            each a list of dicts with {text, bbox, height, confidence, avg_y, avg_x}
+
+    Returns:
+        dict with order_number, restaurant, is_valid, items, subtotal, total, errors
+    """
+    if not ocr_results_per_image or all(len(r) == 0 for r in ocr_results_per_image):
         return {
+            "order_number": "",
+            "restaurant": "",
+            "is_valid": False,
             "items": [],
             "subtotal": 0.0,
             "total": 0.0,
-            "order_number": "",
-            "is_valid": False,
-            "errors": ["No OCR data"]
+            "errors": ["Empty OCR result"],
         }
 
-    # Extract order number and check HKUST validation
-    full_text = " ".join([r["text"] for r in ocr_results])
-    
-    # Order number extraction
-    order_match = re.search(
-        r"(?:Order\s*#|訂單號碼\s*#|訂單\s*#)\s*(\d+)", full_text, re.IGNORECASE
-    )
-    if order_match:
-        order_number = order_match.group(1)
-    else:
-        # Handle split-line: "Order#" on one line, "206" on next
-        for i, result in enumerate(ocr_results):
-            if "#" in result["text"] and i + 1 < len(ocr_results):
-                num_match = re.match(r"^\s*(\d{2,})\s*$", ocr_results[i + 1]["text"])
-                if num_match:
-                    order_number = num_match.group(1)
-                    break
-    
-    # HKUST validation
-    for result in ocr_results:
-        if any(kw in result["text"] for kw in _HKUST_KEYWORDS):
-            is_valid = True
-            break
+    # 1. Convert each image's OCR results to parser entry format
+    entries_list = [_convert_ocr_entries(results) for results in ocr_results_per_image]
 
-    # Step 1: Find section boundaries
-    summary_start = None
-    payment_start = None
+    # 2. Merge multi-screenshot (handles overlap dedup)
+    entries = merge_screenshots(entries_list)
 
-    for i, result in enumerate(ocr_results):
-        text_lower = result["text"].lower()
+    # 3. Cluster into rows
+    rows = cluster_rows(entries)
 
-        # Match "Order Summary" or Chinese variants
-        if any(
-            kw in text_lower
-            for kw in ["order summary", "訂單摘要", "訂單內容", "訂罩内容"]
-        ):
-            summary_start = i
+    # 4. Find section boundaries
+    sec_idx = find_sections(rows)
 
-        # Match "Payment Details" or Chinese variants
-        if any(kw in text_lower for kw in ["payment details", "付款詳情", "付款情"]):
-            payment_start = i
-            break
+    # 5. Parse each section
+    order_number = parse_order_number(rows, sec_idx)
+    restaurant = parse_restaurant(rows, sec_idx)
+    items = parse_items(rows, sec_idx)
+    subtotal, total = parse_payment(rows, sec_idx)
 
-    if summary_start is None or payment_start is None:
-        errors.append("Section boundaries not found")
-        return {"items": [], "subtotal": 0.0, "total": 0.0, "errors": errors}
+    # 6. HKUST validation
+    full_text = " ".join(row_text(r) for r in rows)
+    is_valid = _contains_hkust(full_text)
 
-    # Step 2: Extract item section
-    item_section = ocr_results[summary_start + 1 : payment_start]
+    # 7. Validation errors
+    errors: list[str] = []
 
-    if not item_section:
-        errors.append("No items found between sections")
-        return {"items": [], "subtotal": 0.0, "total": 0.0, "errors": errors}
-
-    # Step 3: Two-phase parsing
-    title_lines: list[str] = []
-    component_lines: list[str] = []
-    in_component_phase = False
-    main_item_keywords: set[str] = set()
-
-    for i, result in enumerate(item_section):
-        text = result["text"].strip()
-        text_lower = text.lower()
-
-        if not text:
-            continue
-
-        # Filter messages
-        if any(kw in text_lower for kw in ["add-on", "thank you", "message"]):
-            continue
-
-        # Skip pure price lines
-        if re.match(r"^(?:HK)?\$\s*[\d,.]+$", text):
-            continue
-
-        # Skip Chinese promotional text
-        if re.match(r"^[\d\u4e00-\u9fff]+$", text):
-            continue
-
-        # If not in component phase yet, check if this line starts it
-        if not in_component_phase:
-            # Component indicators: these signal a component line
-            component_indicators = [
-                "chicken mcnuggets",  # Repeated main item name
-                "hot mustard",
-                "sauce",
-            ]
-            
-            # Only start component phase if we have title AND see a clear indicator
-            if title_lines and any(ind in text_lower for ind in component_indicators):
-                in_component_phase = True
-
-        # Collect into appropriate phase
-        if in_component_phase:
-            component_lines.append(text)
-        else:
-            title_lines.append(text)
-
-    # Step 4: Create item
-    if title_lines:
-        item_name = " ".join(title_lines)
-
-        items.append(
-            {
-                "name": item_name,
-                "quantity": 1,
-                "price": 0.0,
-                "components": component_lines,
-            }
-        )
-
-    # Step 5: Extract prices from Payment Details
-    payment_section = ocr_results[payment_start:]
-
-    # First pass: try to find prices on same line as keywords
-    for result in payment_section:
-        text = result["text"]
-        text_lower = text.lower()
-
-        if (
-            "subtotal" in text_lower or "小計" in text or "合計" in text
-        ) and subtotal == 0.0:
-            price = _extract_price(text)
-            if price > 0:
-                subtotal = price
-
-        if ("total" in text_lower or "總計" in text) and total == 0.0:
-            if (
-                "subtotal" not in text_lower
-                and "小計" not in text
-                and "合計" not in text
-            ):
-                price = _extract_price(text)
-                if price > 0:
-                    total = price
-
-    # Second pass: look at adjacent lines if not found
-    if subtotal == 0.0 or total == 0.0:
-        for i, result in enumerate(payment_section):
-            text_lower = result["text"].lower()
-
-            if (
-                "subtotal" in text_lower or "合計" in result["text"]
-            ) and subtotal == 0.0:
-                for offset in [0, -1, 1]:
-                    if 0 <= i + offset < len(payment_section):
-                        price = _extract_price(payment_section[i + offset]["text"])
-                        if price > 0:
-                            subtotal = price
-                            break
-
-            if ("total" in text_lower or "總計" in result["text"]) and total == 0.0:
-                if "subtotal" not in text_lower and "合計" not in result["text"]:
-                    for offset in [0, -1, 1]:
-                        if 0 <= i + offset < len(payment_section):
-                            price = _extract_price(payment_section[i + offset]["text"])
-                            if price > 0:
-                                total = price
-                                break
-
-    # Validation
     if not items:
-        errors.append("No items extracted")
+        errors.append("No items detected")
+
+    computed_sum = sum(i["price"] * i["quantity"] for i in items)
+    if subtotal and computed_sum and abs(computed_sum - subtotal) > 1.0:
+        errors.append("Subtotal mismatch")
+
+    if subtotal and total and abs(subtotal - total) > 1.0:
+        errors.append("Subtotal/Total mismatch")
+
+    is_valid = is_valid and len(errors) == 0
 
     return {
+        "order_number": order_number,
+        "restaurant": restaurant,
+        "is_valid": is_valid,
         "items": items,
         "subtotal": subtotal,
         "total": total,
-        "order_number": order_number,
-        "is_valid": is_valid,
-        "errors": errors
+        "errors": errors,
     }
-
-
-# Backward compatibility wrapper
-def parse_receipt(text_lines: list[str]) -> dict:
-    """
-    Legacy function for backward compatibility.
-    Converts text lines to OCR result format and calls new parser.
-    """
-    # Convert text lines to minimal OCR result format
-    ocr_results = []
-    for i, text in enumerate(text_lines):
-        ocr_results.append(
-            {
-                "text": text,
-                "bbox": [
-                    [0, i * 20],
-                    [100, i * 20],
-                    [100, (i + 1) * 20],
-                    [0, (i + 1) * 20],
-                ],
-                "height": 20.0,
-                "confidence": 1.0,
-                "avg_y": i * 20,
-            }
-        )
-
-    result = parse_receipt_structured(ocr_results)
-
-    # Add legacy fields for backward compatibility
-    result["order_number"] = ""
-    result["restaurant"] = ""
-    result["is_valid"] = False
-
-    return result

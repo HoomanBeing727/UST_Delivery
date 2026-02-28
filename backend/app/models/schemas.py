@@ -9,6 +9,7 @@ class OrderItem(BaseModel):
 
 class OCRResponse(BaseModel):
     order_number: str
+    restaurant: str = ""
     items: list[OrderItem]
     subtotal: float
     total: float
