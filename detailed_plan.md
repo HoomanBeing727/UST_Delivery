@@ -167,6 +167,10 @@ The app features:
 > where \( C \) is a constant value determined later.  
 Values are rounded to avoid decimals.
 
+### Platform Fee
+
+We will charge a **small platform fee** (around $0.5 - $1.0) to cover operational costs from each order, deducted from the user’s payout.
+
 ---
 
 ## 💬 7. Temporary Chat Session
